@@ -67,10 +67,108 @@ O fluxo de nossa aplicação é a seguinte:
               Export / Arquivo
 
 
-                 GOVERNANÇA E OPERAÇÃO
+               GOVERNANÇA E OPERAÇÃO
 
        ┌──────────────┬───────────────┬──────────────┐
        │              │               │              │
        ▼              ▼               ▼              ▼
- CloudWatch       CloudTrail       AWS Backup   CloudFormation
- Logs/Métricas    Auditoria        Proteção          IaC
+     CloudWatch     CloudTrail    AWS Backup   CloudFormation
+    Logs/Métricas    Auditoria     Proteção          IaC
+
+#En-US Our project's flow goes like this:
+
+                         CLIENT
+                            │
+                            ▼
+                     ┌─────────────┐
+                     │ AWS Shield  │
+                     │    DDoS     │
+                     └──────┬──────┘
+                            │
+                            ▼
+                     ┌─────────────┐
+                     │   AWS WAF   │
+                     │     L7      │
+                     └──────┬──────┘
+                            │
+                            ▼
+                  ┌───────────────────┐
+                  │  Amazon CloudFront│
+                  │    Global Edge    │
+                  └─────────┬─────────┘
+                            │
+                 ┌──────────┴──────────┐
+                 │                     │
+                 ▼                     ▼
+        ┌─────────────────┐   ┌─────────────────┐
+        │ Primary Origin  │   │ Secondary Origin│
+        │ S3 — sa-east-1  │   │ S3 — us-east-1  │
+        └────────┬────────┘   └────────┬────────┘
+                 │                     │
+                 └─────── Failover ────┘
+
+
+              LEADS / FORM SUBMISSION FLOW
+
+                    Client
+                       │
+                       ▼
+                Amazon API Gateway
+                       │
+                       ▼
+                  AWS Lambda
+                Validation/Processing
+                       │
+                       ▼
+                Amazon DynamoDB
+                   Leads Table
+                       │
+                       ▼
+                  Amazon S3
+              Export / Archive
+
+
+                    OPERATIONS & GOVERNANCE
+
+       ┌──────────────┬───────────────┬──────────────┐
+       │              │               │              │
+       ▼              ▼               ▼              ▼
+     CloudWatch    CloudTrail   AWS Backup   CloudFormation
+    Logs/Metrics    Auditing       Protection        IaC
+
+
+#Recursos/ Resources
+
+° AWS Shield para proteção contra ataques DDoS;
+° AWS WAF para proteção na camada de aplicação (L7);
+° Amazon CloudFront como CDN e camada global de distribuição;
+° AWS Certificate Manager (ACM) para certificado SSL/TLS e HTTPS;
+° Amazon S3 para hospedagem do site estático;
+° Amazon API Gateway para disponibilização dos endpoints;
+° AWS Lambda para validação e processamento das requisições;
+° Amazon DynamoDB para armazenamento dos leads;
+° Amazon CloudWatch para logs, métricas e alarmes;
+° AWS CloudTrail para auditoria e registro das chamadas de API;
+° AWS Backup para proteção dos dados;
+° Versionamento e Cross-Region Replication (CRR);
+° AWS CloudFormation para implementação da infraestrutura como código (IaC).
+
+A região principal da infraestrutura é us-east-2 (Ohio), enquanto a região secundária é us-east-1 (N. Virginia). O bucket S3 primário do site está localizado em sa-east-1 (São Paulo), enquanto o bucket secundário está localizado em us-east-1.
+
+EN-US 
+
+° AWS Shield for DDoS protection;
+° AWS WAF for Layer 7 application protection;
+° Amazon CloudFront as the global CDN and distribution layer;
+° AWS Certificate Manager (ACM) for SSL/TLS certificates and HTTPS;
+° Amazon S3 for static website hosting;
+° Amazon API Gateway for endpoint exposure;
+° AWS Lambda for request validation and processing;
+° Amazon DynamoDB for lead storage;
+° Amazon CloudWatch for logs, metrics, and alarms;
+° AWS CloudTrail for API auditing and logging;
+° AWS Backup for data protection;
+° Versioning and Cross-Region Replication (CRR);
+° AWS CloudFormation for Infrastructure as Code (IaC).
+
+The primary infrastructure region is us-east-2 (Ohio), while the secondary region is us-east-1 (N. Virginia). The primary website S3 bucket is located in sa-east-1 (São Paulo), while the secondary bucket is located in us-east-1.
