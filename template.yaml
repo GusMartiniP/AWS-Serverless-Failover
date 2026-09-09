@@ -1,0 +1,532 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Wizard Resilience Hackathon - Infraestrutura Completa Consolidada 100% AWS (Case B)"
+
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+    Description: "Identificador do ambiente"
+  AlertEmail:
+    Type: String
+    Default: "alerta-devops@wizard.com.br"
+    Description: "E-mail para recebimento de alarmes do CloudWatch via SNS"
+
+Resources:
+  # =========================================================================
+  # 1. PERSISTENCIA (DYNAMODB ON-DEMAND COM PITR)
+  # =========================================================================
+  DynamoDBTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      TableName: !Sub "${AWS::StackName}-wizard-leads"
+      BillingMode: "PAY_PER_REQUEST"
+      AttributeDefinitions:
+        - AttributeName: "leadId"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "leadId"
+          KeyType: "HASH"
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: "Project"
+          Value: "WizardResilience"
+
+  # =========================================================================
+  # 2. STORAGE ESTATICO (S3 BUCKETS PRIMARIO E REPLICA COM CRR)
+  # =========================================================================
+  S3BucketReplica:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-site-replica-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: "Enabled"
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: "BucketOwnerEnforced"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: "AES256"
+            BucketKeyEnabled: true
+
+  S3BucketPrimary:
+    Type: "AWS::S3::Bucket"
+    DependsOn: 
+      - S3BucketReplica
+      - IAMRoleS3Crr
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-site-primary-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: "Enabled"
+      ReplicationConfiguration:
+        Role: !GetAtt IAMRoleS3Crr.Arn
+        Rules:
+          - Id: "WizardFailover"
+            Status: "Enabled"
+            DeleteMarkerReplication:
+              Status: "Disabled"
+            Destination:
+              Bucket: !GetAtt S3BucketReplica.Arn
+              Metrics:
+                Status: "Enabled"
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: "BucketOwnerEnforced"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: "AES256"
+            BucketKeyEnabled: true
+
+  # =========================================================================
+  # 3. ORIGIN ACCESS CONTROL (OAC)
+  # =========================================================================
+  CloudFrontOriginAccessControlPrimary:
+    Type: "AWS::CloudFront::OriginAccessControl"
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-oac-primary"
+        OriginAccessControlOriginType: "s3"
+        SigningBehavior: "always"
+        SigningProtocol: "sigv4"
+
+  CloudFrontOriginAccessControlReplica:
+    Type: "AWS::CloudFront::OriginAccessControl"
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-oac-replica"
+        OriginAccessControlOriginType: "s3"
+        SigningBehavior: "always"
+        SigningProtocol: "sigv4"
+
+  # =========================================================================
+  # 4. BLINDAGEM DE BORDA (AWS WAF V2 - ESCOPO GLOBAL)
+  # =========================================================================
+  WAFv2WebACL:
+    Type: "AWS::WAFv2::WebACL"
+    Properties:
+      Name: !Sub "${AWS::StackName}-waf-acl"
+      Scope: "CLOUDFRONT"
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${AWS::StackName}-waf-metrics"
+      Rules:
+        - Name: "AWS-AWSManagedRulesCommonRuleSet"
+          Priority: 0
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: "AWS"
+              Name: "AWSManagedRulesCommonRuleSet"
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: "CommonRuleSetMetrics"
+        - Name: "AWS-AWSManagedRulesAmazonIpReputationList"
+          Priority: 1
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: "AWS"
+              Name: "AWSManagedRulesAmazonIpReputationList"
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: "IpReputationMetrics"
+        - Name: "rate-limit-geral"
+          Priority: 2
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 100
+              AggregateKeyType: "IP"
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: "RateLimitMetrics"
+
+  # =========================================================================
+  # 5. CDN GLOBAL COM ORIGIN GROUP (FAILOVER AUTOMATICO)
+  # =========================================================================
+  CloudFrontDistribution:
+    Type: "AWS::CloudFront::Distribution"
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "Presenca Digital Blindada ${AWS::StackName}"
+        DefaultRootObject: "index.html"
+        WebACLId: !GetAtt WAFv2WebACL.Arn
+        Origins:
+          - Id: "S3PrimaryOrigin"
+            DomainName: !GetAtt S3BucketPrimary.RegionalDomainName
+            OriginAccessControlId: !GetAtt CloudFrontOriginAccessControlPrimary.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - Id: "S3ReplicaOrigin"
+            DomainName: !GetAtt S3BucketReplica.RegionalDomainName
+            OriginAccessControlId: !GetAtt CloudFrontOriginAccessControlReplica.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        OriginGroups:
+          Quantity: 1
+          Items:
+            - Id: "WizardFailoverGroup"
+              FailoverCriteria:
+                StatusCodes:
+                  Quantity: 6
+                  Items: [403, 404, 500, 502, 503, 504]
+              Members:
+                Quantity: 2
+                Items:
+                  - OriginId: "S3PrimaryOrigin"
+                  - OriginId: "S3ReplicaOrigin"
+        DefaultCacheBehavior:
+          TargetOriginId: "WizardFailoverGroup"
+          ViewerProtocolPolicy: "redirect-to-https"
+          AllowedMethods: ["GET", "HEAD", "OPTIONS"]
+          CachedMethods: ["GET", "HEAD"]
+          Compress: true
+          CachePolicyId: "658327ea-f89d-4fab-a63d-7e88639e58f6"
+
+  # =========================================================================
+  # 6. S3 BUCKET POLICIES (ACESSO ASSINADO OAC)
+  # =========================================================================
+  S3BucketPolicyPrimary:
+    Type: "AWS::S3::BucketPolicy"
+    Properties:
+      Bucket: !Ref S3BucketPrimary
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "AllowCloudFrontOAC"
+            Effect: "Allow"
+            Principal:
+              Service: "cloudfront.amazonaws.com"
+            Action: "s3:GetObject"
+            Resource: !Sub "arn:aws:s3:::${AWS::StackName}-site-primary-${AWS::AccountId}/*"
+            Condition:
+              StringEquals:
+                "AWS:SourceArn": !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+
+  S3BucketPolicyReplica:
+    Type: "AWS::S3::BucketPolicy"
+    Properties:
+      Bucket: !Ref S3BucketReplica
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "AllowCloudFrontOAC"
+            Effect: "Allow"
+            Principal:
+              Service: "cloudfront.amazonaws.com"
+            Action: "s3:GetObject"
+            Resource: !Sub "arn:aws:s3:::${AWS::StackName}-site-replica-${AWS::AccountId}/*"
+            Condition:
+              StringEquals:
+                "AWS:SourceArn": !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+
+  # =========================================================================
+  # 7. IAM ROLES (CRR E LAMBDA LEAST PRIVILEGE)
+  # =========================================================================
+  IAMRoleS3Crr:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-s3-crr-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "s3.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: "S3ReplicationPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "s3:GetReplicationConfiguration"
+                  - "s3:ListBucket"
+                  - "s3:GetObjectVersionForReplication"
+                  - "s3:GetObjectVersionAcl"
+                  - "s3:GetObjectVersionTagging"
+                Resource:
+                  - !Sub "arn:aws:s3:::${AWS::StackName}-site-primary-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::${AWS::StackName}-site-primary-${AWS::AccountId}/*"
+              - Effect: "Allow"
+                Action:
+                  - "s3:ReplicateObject"
+                  - "s3:ReplicateDelete"
+                  - "s3:ReplicateTags"
+                Resource:
+                  - !Sub "arn:aws:s3:::${AWS::StackName}-site-replica-${AWS::AccountId}/*"
+
+  IAMRoleLambdaApp:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-lambda-leads-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: "LambdaDynamoLogsPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "dynamodb:PutItem"
+                Resource: !GetAtt DynamoDBTable.Arn
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/lambda/*"
+
+  # =========================================================================
+  # 8. BACKEND SERVERLESS (LAMBDA COM CODIGO INLINE)
+  # =========================================================================
+  LeadsHandlerFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-leads-handler"
+      Runtime: "nodejs20.x"
+      Handler: "index.handler"
+      Role: !GetAtt IAMRoleLambdaApp.Arn
+      Timeout: 10
+      MemorySize: 128
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref DynamoDBTable
+          ALLOWED_ORIGIN: !Sub "https://${CloudFrontDistribution.DomainName}"
+      Code:
+        ZipFile: |
+          const { DynamoDBClient, PutItemCommand } = require("@aws-sdk/client-dynamodb");
+          const { randomUUID } = require("crypto");
+          const client = new DynamoDBClient({});
+
+          function corsHeaders(origin) {
+            return {
+              "Access-Control-Allow-Origin": origin || "*",
+              "Access-Control-Allow-Methods": "POST, OPTIONS",
+              "Access-Control-Allow-Headers": "Content-Type"
+            };
+          }
+
+          function isValidEmail(email) {
+            return typeof email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254;
+          }
+
+          exports.handler = async (event) => {
+            const origin = process.env.ALLOWED_ORIGIN;
+            if (event.httpMethod === "OPTIONS") {
+              return { statusCode: 200, headers: corsHeaders(origin), body: "" };
+            }
+            try {
+              const body = JSON.parse(event.body || "{}");
+              const nome = String(body.nome || "").trim().slice(0, 120);
+              const email = String(body.email || "").trim().slice(0, 254);
+              const telefone = String(body.telefone || "").trim().slice(0, 20);
+
+              if (!nome || !isValidEmail(email)) {
+                return {
+                  statusCode: 400,
+                  headers: corsHeaders(origin),
+                  body: JSON.stringify({ message: "Dados invalidos." })
+                };
+              }
+
+              const leadId = randomUUID();
+              await client.send(new PutItemCommand({
+                TableName: process.env.TABLE_NAME,
+                Item: {
+                  leadId: { S: leadId },
+                  nome: { S: nome },
+                  email: { S: email },
+                  telefone: { S: telefone },
+                  criadoEm: { S: new Date().toISOString() }
+                }
+              }));
+
+              return {
+                statusCode: 200,
+                headers: corsHeaders(origin),
+                body: JSON.stringify({ message: "Lead recebido com sucesso.", leadId })
+              };
+            } catch (err) {
+              console.error(err);
+              return {
+                statusCode: 500,
+                headers: corsHeaders(origin),
+                body: JSON.stringify({ message: "Erro interno." })
+              };
+            }
+          };
+
+  # =========================================================================
+  # 9. API GATEWAY REST COM THROTTLING E PROXY INTEGRATION
+  # =========================================================================
+  LeadsRestApi:
+    Type: "AWS::ApiGateway::RestApi"
+    Properties:
+      Name: !Sub "${AWS::StackName}-api"
+      EndpointConfiguration:
+        Types:
+          - "REGIONAL"
+
+  LeadsApiResource:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      RestApiId: !Ref LeadsRestApi
+      ParentId: !GetAtt LeadsRestApi.RootResourceId
+      PathPart: "leads"
+
+  LeadsApiMethodPost:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref LeadsRestApi
+      ResourceId: !Ref LeadsApiResource
+      HttpMethod: "POST"
+      AuthorizationType: "NONE"
+      Integration:
+        Type: "AWS_PROXY"
+        IntegrationHttpMethod: "POST"
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LeadsHandlerFunction.Arn}/invocations"
+
+  LeadsApiMethodOptions:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref LeadsRestApi
+      ResourceId: !Ref LeadsApiResource
+      HttpMethod: "OPTIONS"
+      AuthorizationType: "NONE"
+      Integration:
+        Type: "AWS_PROXY"
+        IntegrationHttpMethod: "POST"
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LeadsHandlerFunction.Arn}/invocations"
+
+  LeadsApiDeployment:
+    Type: "AWS::ApiGateway::Deployment"
+    DependsOn:
+      - LeadsApiMethodPost
+      - LeadsApiMethodOptions
+    Properties:
+      RestApiId: !Ref LeadsRestApi
+
+  LeadsApiStageProd:
+    Type: "AWS::ApiGateway::Stage"
+    Properties:
+      RestApiId: !Ref LeadsRestApi
+      DeploymentId: !Ref LeadsApiDeployment
+      StageName: "prod"
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingRateLimit: 100
+          ThrottlingBurstLimit: 200
+
+  LambdaPermissionApiGateway:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      FunctionName: !GetAtt LeadsHandlerFunction.Arn
+      Action: "lambda:InvokeFunction"
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${LeadsRestApi}/*/*/leads"
+
+  # =========================================================================
+  # 10. OBSERVABILIDADE: ALERTAS CLOUDWATCH & NOTIFICACOES SNS
+  # =========================================================================
+  SNSTopicAlerts:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      TopicName: !Sub "${AWS::StackName}-failover-alerts"
+
+  SNSSubscriptionEmail:
+    Type: "AWS::SNS::Subscription"
+    Properties:
+      TopicArn: !Ref SNSTopicAlerts
+      Endpoint: !Ref AlertEmail
+      Protocol: "email"
+
+  CloudWatchAlarmApi5XX:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-ApiGateway-5XX-Errors"
+      AlarmDescription: "Disparado quando a API de leads apresentar erros internos (5XX)."
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref SNSTopicAlerts
+      MetricName: "5XXError"
+      Namespace: "AWS/ApiGateway"
+      Statistic: "Sum"
+      Dimensions:
+        - Name: "ApiName"
+          Value: !Sub "${AWS::StackName}-api"
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      TreatMissingData: "notBreaching"
+
+  CloudWatchAlarmS3Replication:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-S3-Replication-Failure"
+      AlarmDescription: "Disparado caso ocorra falha na replicacao do S3."
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref SNSTopicAlerts
+      MetricName: "OperationsFailedReplication"
+      Namespace: "AWS/S3"
+      Statistic: "Sum"
+      Dimensions:
+        - Name: "SourceBucket"
+          Value: !Sub "${AWS::StackName}-site-primary-${AWS::AccountId}"
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      TreatMissingData: "notBreaching"
+
+# =========================================================================
+# SAIDAS DO AMBIENTE (ENDPOINTS E BUCKETS)
+# =========================================================================
+Outputs:
+  SiteUrl:
+    Description: "URL publica oficial via CloudFront"
+    Value: !Sub "https://${CloudFrontDistribution.DomainName}"
+  ApiLeadsEndpoint:
+    Description: "Endpoint de captura de leads via API Gateway"
+    Value: !Sub "https://${LeadsRestApi}.execute-api.${AWS::Region}.amazonaws.com/prod/leads"
+  BucketPrimario:
+    Description: "Bucket S3 Primario (faca upload do index.html aqui)"
+    Value: !Ref S3BucketPrimary
+  BucketReplica:
+    Description: "Bucket S3 Replica (alvo da replicacao automatica)"
+    Value: !Ref S3BucketReplica
