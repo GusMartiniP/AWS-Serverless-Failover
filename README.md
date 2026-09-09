@@ -157,18 +157,18 @@ A região principal da infraestrutura é us-east-2 (Ohio), enquanto a região se
 
 EN-US 
 
-° AWS Shield for DDoS protection;
-° AWS WAF for Layer 7 application protection;
-° Amazon CloudFront as the global CDN and distribution layer;
-° AWS Certificate Manager (ACM) for SSL/TLS certificates and HTTPS;
-° Amazon S3 for static website hosting;
-° Amazon API Gateway for endpoint exposure;
-° AWS Lambda for request validation and processing;
-° Amazon DynamoDB for lead storage;
-° Amazon CloudWatch for logs, metrics, and alarms;
-° AWS CloudTrail for API auditing and logging;
-° AWS Backup for data protection;
-° Versioning and Cross-Region Replication (CRR);
-° AWS CloudFormation for Infrastructure as Code (IaC).
+° AWS Shield for DDoS protection;   
+° AWS WAF for Layer 7 application protection;   
+° Amazon CloudFront as the global CDN and distribution layer;  
+° AWS Certificate Manager (ACM) for SSL/TLS certificates and HTTPS;   
+° Amazon S3 for static website hosting;    
+° Amazon API Gateway for endpoint exposure;   
+° AWS Lambda for request validation and processing;   
+° Amazon DynamoDB for lead storage;   
+° Amazon CloudWatch for logs, metrics, and alarms;  
+° AWS CloudTrail for API auditing and logging;   
+° AWS Backup for data protection;   
+° Versioning and Cross-Region Replication (CRR);   
+° AWS CloudFormation for Infrastructure as Code (IaC).  
 
 The primary infrastructure region is us-east-2 (Ohio), while the secondary region is us-east-1 (N. Virginia). The primary website S3 bucket is located in sa-east-1 (São Paulo), while the secondary bucket is located in us-east-1.
