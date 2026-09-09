@@ -139,19 +139,19 @@ O fluxo de nossa aplicação é a seguinte:
 
 #Recursos/ Resources
 
-° AWS Shield para proteção contra ataques DDoS;
-° AWS WAF para proteção na camada de aplicação (L7);
-° Amazon CloudFront como CDN e camada global de distribuição;
-° AWS Certificate Manager (ACM) para certificado SSL/TLS e HTTPS;
-° Amazon S3 para hospedagem do site estático;
-° Amazon API Gateway para disponibilização dos endpoints;
-° AWS Lambda para validação e processamento das requisições;
-° Amazon DynamoDB para armazenamento dos leads;
-° Amazon CloudWatch para logs, métricas e alarmes;
-° AWS CloudTrail para auditoria e registro das chamadas de API;
-° AWS Backup para proteção dos dados;
-° Versionamento e Cross-Region Replication (CRR);
-° AWS CloudFormation para implementação da infraestrutura como código (IaC).
+° AWS Shield para proteção contra ataques DDoS;     
+° AWS WAF para proteção na camada de aplicação (L7);    
+° Amazon CloudFront como CDN e camada global de distribuição;   
+° AWS Certificate Manager (ACM) para certificado SSL/TLS e HTTPS;   
+° Amazon S3 para hospedagem do site estático;   
+° Amazon API Gateway para disponibilização dos endpoints;   
+° AWS Lambda para validação e processamento das requisições;   
+° Amazon DynamoDB para armazenamento dos leads;    
+° Amazon CloudWatch para logs, métricas e alarmes;    
+° AWS CloudTrail para auditoria e registro das chamadas de API;   
+° AWS Backup para proteção dos dados;   
+° Versionamento e Cross-Region Replication (CRR);  
+° AWS CloudFormation para implementação da infraestrutura como código (IaC).  
 
 A região principal da infraestrutura é us-east-2 (Ohio), enquanto a região secundária é us-east-1 (N. Virginia). O bucket S3 primário do site está localizado em sa-east-1 (São Paulo), enquanto o bucket secundário está localizado em us-east-1.
 
