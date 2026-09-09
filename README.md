@@ -12,3 +12,65 @@ Projeto criado para o Hackaton Future Builders, patrocinado pela Escola da Nuvem
 🎯 Objetivos/Goals:
 
 Este projeto possui o objetivo de, utilizando ferramentas totalmente gerenciadas pela AWS, criar um site estático, serverless, que tenha alta disponibilidade e resiliência em casos extremos como apagar diretamente o index.html do Bucket S3, e ainda assim o site continuar de pé, com RTO médio de 30 segundos. / This project aims to create a static, serverless website using tools fully managed by AWS. This website will have high availability and resilience in extreme cases, such as directly deleting the index.html file from the S3 bucket, and still remain online, with an average RTO of 30 seconds.
+
+
+O fluxo de nossa aplicação é a seguinte:
+
+                         CLIENTE
+                            │
+                            ▼
+                     ┌─────────────┐
+                     │ AWS Shield  │
+                     │    DDoS     │
+                     └──────┬──────┘
+                            │
+                            ▼
+                     ┌─────────────┐
+                     │   AWS WAF   │
+                     │     L7      │
+                     └──────┬──────┘
+                            │
+                            ▼
+                  ┌───────────────────┐
+                  │  Amazon CloudFront│
+                  │    Global Edge    │
+                  └─────────┬─────────┘
+                            │
+                 ┌──────────┴──────────┐
+                 │                     │
+                 ▼                     ▼
+        ┌─────────────────┐   ┌─────────────────┐
+        │ Primary Origin  │   │ Secondary Origin│
+        │ S3 — sa-east-1  │   │ S3 — us-east-1  │
+        └────────┬────────┘   └────────┬────────┘
+                 │                     │
+                 └─────── Failover ────┘
+
+
+             FLUXO DE LEADS / FORMULÁRIOS
+
+                    Cliente
+                       │
+                       ▼
+                Amazon API Gateway
+                       │
+                       ▼
+                  AWS Lambda
+                Validação/Processamento
+                       │
+                       ▼
+                Amazon DynamoDB
+                   Tabela Leads
+                       │
+                       ▼
+                  Amazon S3
+              Export / Arquivo
+
+
+                 GOVERNANÇA E OPERAÇÃO
+
+       ┌──────────────┬───────────────┬──────────────┐
+       │              │               │              │
+       ▼              ▼               ▼              ▼
+ CloudWatch       CloudTrail       AWS Backup   CloudFormation
+ Logs/Métricas    Auditoria        Proteção          IaC
